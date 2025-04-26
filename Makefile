@@ -4,6 +4,8 @@ CARGO_CLIPPY_CMD = clippy --all-targets --workspace -- -D warnings
 CARGO_FMT_CMD = fmt --check --all
 CARGO_DOC_CMD = doc 
 
+all: test
+
 clean:
 	cargo clean
 
