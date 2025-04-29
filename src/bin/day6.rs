@@ -1,12 +1,14 @@
 use std::collections::HashSet;
 
+const MAX_STEPS: usize = 10_000;
+
 fn main() {
     println!("{}", part_1(INPUT));
     println!("{}", part_2(INPUT));
 }
 
 fn part_1(input: &str) -> usize {
-    MapBuilder::from(input)
+    Map::from_str(input)
         .build()
         .run()
         .unwrap()
@@ -19,29 +21,23 @@ fn part_1(input: &str) -> usize {
 }
 
 fn part_2(input: &str) -> usize {
-    let map = MapBuilder::from(input).build();
-    let n_threads: usize = std::thread::available_parallelism().unwrap().into();
-
-    let handles = (0..n_threads)
-        .map(|thread_idx| {
-            let map = map.clone();
-            std::thread::spawn(move || {
-                map.empty_positions()
-                    .skip(thread_idx)
-                    .step_by(n_threads)
-                    .filter(|empty_position| {
-                        let mut map = map.clone();
-                        map.obstacles.insert(*empty_position);
-                        map.run().is_err()
-                    })
-                    .count()
-            })
-        })
-        .collect::<Vec<_>>();
-
-    handles
+    let map = Map::from_str(input).build();
+    map.clone()
+        .run()
+        .unwrap()
+        .guard
+        .previous
         .into_iter()
-        .map(|handle| handle.join().unwrap())
+        .map(|(position, _)| position)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .map(|position| {
+            if let Ok(map) = map.clone().place_obstacle(position) {
+                if map.run().is_err() { 1 } else { 0 }
+            } else {
+                0
+            }
+        })
         .sum()
 }
 
@@ -53,37 +49,82 @@ struct Map {
 }
 
 impl Map {
-    fn empty_positions(&self) -> impl Iterator<Item = Position> {
-        (0..=self.bounds.0).flat_map(|i| (0..=self.bounds.1).map(move |j| (i, j)))
+    fn from_str(input: &str) -> MapBuilder {
+        input
+            .lines()
+            .enumerate()
+            .flat_map(|(i, line)| line.chars().enumerate().map(move |(j, c)| (i, j, c)))
+            .fold(MapBuilder::new(), |mut builder, (i, j, c)| {
+                match c {
+                    '#' => builder.add_obstacle((i as isize, j as isize)),
+                    '^' => builder.add_guard((i as isize, j as isize), Direction::Up),
+                    '>' => builder.add_guard((i as isize, j as isize), Direction::Right),
+                    'v' => builder.add_guard((i as isize, j as isize), Direction::Down),
+                    '<' => builder.add_guard((i as isize, j as isize), Direction::Left),
+                    _ => {}
+                };
+                builder
+            })
+    }
+
+    //fn place_obstacle(&mut self) -> Result<Position, Occupied> {
+    //    let position = self.guard.next_position();
+    //    if self.obstacles.contains(&position) {
+    //        Err(Occupied)
+    //    } else {
+    //        self.obstacles.insert(position.clone());
+    //        Ok(position)
+    //    }
+    //}
+    fn place_obstacle(mut self, position: Position) -> Result<Self, Occupied> {
+        if self.obstacles.contains(&position) {
+            Err(Occupied)
+        } else {
+            self.obstacles.insert(position);
+            Ok(self)
+        }
     }
 
     fn run(mut self) -> Result<Self, Loop> {
-        while self.guard.in_bounds(&self.bounds) {
-            let next = self.guard.direction.step(&self.guard.position);
-            if self.obstacles.contains(&next) {
-                self.guard.direction = self.guard.direction.turn_right();
-            } else {
-                self.guard
-                    .previous
-                    .insert((self.guard.position, self.guard.direction.clone()));
-                self.guard.position = next;
-            }
-
-            if self
-                .guard
-                .previous
-                .contains(&(self.guard.position, self.guard.direction.clone()))
-            {
+        for _ in 0..MAX_STEPS {
+            if self.is_loop() {
                 return Err(Loop);
+            };
+            if self.is_over() {
+                return Ok(self);
             }
+            self = self.step();
         }
+        panic!("A simulation reached MAX_STEPS!")
+    }
 
-        Ok(self)
+    fn step(mut self) -> Self {
+        self.guard = if self.obstacles.contains(&self.guard.next_position()) {
+            self.guard.turn_right()
+        } else {
+            self.guard.step()
+        };
+        self
+    }
+
+    fn is_over(&self) -> bool {
+        !self.guard.is_in_bounds(&self.bounds)
+    }
+
+    fn is_loop(&self) -> bool {
+        let guard_state = (
+            self.guard.position.to_owned(),
+            self.guard.direction.to_owned(),
+        );
+        self.guard.previous.contains(&guard_state)
     }
 }
 
 #[derive(Debug)]
 struct Loop;
+
+#[derive(Debug)]
+struct Occupied;
 
 struct MapBuilder {
     guard: Option<Guard>,
@@ -92,6 +133,14 @@ struct MapBuilder {
 }
 
 impl MapBuilder {
+    fn new() -> Self {
+        Self {
+            guard: None,
+            obstacles: HashSet::new(),
+            bounds: (0, 0),
+        }
+    }
+
     fn build(self) -> Map {
         Map {
             guard: self.guard.unwrap(),
@@ -115,31 +164,6 @@ impl MapBuilder {
     }
 }
 
-impl From<&str> for MapBuilder {
-    fn from(input: &str) -> Self {
-        let builder = MapBuilder {
-            guard: None,
-            obstacles: HashSet::new(),
-            bounds: (0, 0),
-        };
-        input
-            .lines()
-            .enumerate()
-            .flat_map(|(i, line)| line.chars().enumerate().map(move |(j, c)| (i, j, c)))
-            .fold(builder, |mut builder, (i, j, c)| {
-                match c {
-                    '#' => builder.add_obstacle((i as isize, j as isize)),
-                    '^' => builder.add_guard((i as isize, j as isize), Direction::Up),
-                    '>' => builder.add_guard((i as isize, j as isize), Direction::Right),
-                    'v' => builder.add_guard((i as isize, j as isize), Direction::Down),
-                    '<' => builder.add_guard((i as isize, j as isize), Direction::Left),
-                    _ => {}
-                };
-                builder
-            })
-    }
-}
-
 #[derive(Clone, Debug)]
 struct Guard {
     position: Position,
@@ -148,11 +172,38 @@ struct Guard {
 }
 
 impl Guard {
-    fn in_bounds(&self, bounds: &Position) -> bool {
-        self.position.0.le(&bounds.0)
-            && self.position.1.le(&bounds.1)
-            && self.position.0.ge(&0)
-            && self.position.1.ge(&1)
+    fn turn_right(self) -> Self {
+        Self {
+            direction: self.direction.turn_right(),
+            ..self
+        }
+    }
+
+    fn step(mut self) -> Self {
+        let next = self.next_position();
+        self.previous
+            .insert((self.position, self.direction.clone()));
+        Self {
+            position: next,
+            ..self
+        }
+    }
+
+    fn next_position(&self) -> Position {
+        let (i, j) = self.position;
+        match self.direction {
+            Direction::Up => (i - 1, j),
+            Direction::Right => (i, j + 1),
+            Direction::Down => (i + 1, j),
+            Direction::Left => (i, j - 1),
+        }
+    }
+
+    fn is_in_bounds(&self, bounds: &Position) -> bool {
+        let (i, j) = &self.position;
+        let i_range = 0..=bounds.0;
+        let j_range = 0..=bounds.1;
+        i_range.contains(i) && j_range.contains(j)
     }
 }
 
@@ -173,15 +224,6 @@ impl Direction {
             Self::Right => Self::Down,
             Self::Down => Self::Left,
             Self::Left => Self::Up,
-        }
-    }
-
-    fn step(&self, from: &Position) -> Position {
-        match self {
-            Self::Up => (from.0 - 1, from.1),
-            Self::Right => (from.0, from.1 + 1),
-            Self::Down => (from.0 + 1, from.1),
-            Self::Left => (from.0, from.1 - 1),
         }
     }
 }
