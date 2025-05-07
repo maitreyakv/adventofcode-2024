@@ -22,23 +22,37 @@ fn part_1(input: &str) -> usize {
 
 fn part_2(input: &str) -> usize {
     let map = Map::from_str(input).build();
-    map.clone()
+    let placements = map
+        .clone()
         .run()
         .unwrap()
         .guard
         .previous
         .into_iter()
         .map(|(position, _)| position)
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .map(|position| {
-            if let Ok(map) = map.clone().place_obstacle(position) {
-                if map.run().is_err() { 1 } else { 0 }
-            } else {
-                0
-            }
+        .collect::<HashSet<_>>();
+    let n_threads: usize = std::thread::available_parallelism().unwrap().into();
+    let handles = (0..n_threads)
+        .map(|thread_idx| {
+            let map = map.clone();
+            let placements = placements.clone();
+            std::thread::spawn(move || {
+                placements
+                    .iter()
+                    .skip(thread_idx)
+                    .step_by(n_threads)
+                    .map(|position| {
+                        if let Ok(map) = map.clone().place_obstacle(position.to_owned()) {
+                            if map.run().is_err() { 1 } else { 0 }
+                        } else {
+                            0
+                        }
+                    })
+                    .sum::<usize>()
+            })
         })
-        .sum()
+        .collect::<Vec<_>>();
+    handles.into_iter().map(|h| h.join().unwrap()).sum()
 }
 
 #[derive(Clone, Debug)]
@@ -67,15 +81,6 @@ impl Map {
             })
     }
 
-    //fn place_obstacle(&mut self) -> Result<Position, Occupied> {
-    //    let position = self.guard.next_position();
-    //    if self.obstacles.contains(&position) {
-    //        Err(Occupied)
-    //    } else {
-    //        self.obstacles.insert(position.clone());
-    //        Ok(position)
-    //    }
-    //}
     fn place_obstacle(mut self, position: Position) -> Result<Self, Occupied> {
         if self.obstacles.contains(&position) {
             Err(Occupied)
